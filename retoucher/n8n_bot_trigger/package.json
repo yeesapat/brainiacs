@@ -1,0 +1,13 @@
+{
+  "name": "discord-n8n-bot",
+  "version": "1.0.0",
+  "description": "Discord bot that triggers n8n webhook for messages",
+  "main": "discordbot.js",
+  "scripts": {
+    "start": "node discordbot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.1"
+  }
+}

@@ -1,0 +1,167 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "9_Sp9EWDphFR6ujOcsaRI1JDEACp4nLG4SSQuVgALgvaEbfCg8bfgHdvyquvImc6DEXi",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -660,
+        200
+      ],
+      "id": "ee250be9-3b3c-4537-95cc-125f5aefb93e",
+      "name": "Webhook",
+      "webhookId": "efec9bee-b1eb-4704-81b0-24d9edd4ec6d"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "python",
+        "pythonCode": "# Get input data\nitems = _input.all()\n\n# Process the first item (assuming single input)\nif items:\n    item = items[0]\n    \n    # Safely get the data\n    attachments = item.json.get('body', {}).get('attachments', [])\n    message_content = item.json.get('body', {}).get('content', '')\n    \n    # Create the structured output\n    result = {\n        'message': message_content,\n        'attachmentInfo': [att.get('name', att.get('filename', '')) for att in attachments],\n        'attachmentUrls': [att.get('url') for att in attachments if att.get('url')]\n    }\n    \n    # Return as single dictionary\n    return result\nelse:\n    # Return empty structure if no input\n    return {\n        'message': '',\n        'attachmentInfo': [],\n        'attachmentUrls': []\n    }"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -460,
+        200
+      ],
+      "id": "dfdde4b5-c934-4bc7-bcc6-9638360d51db",
+      "name": "Code"
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        20,
+        200
+      ],
+      "id": "split-batches-node",
+      "name": "Split in Batches"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        200
+      ],
+      "id": "45a46070-440d-44c3-9a10-52db6e829f34",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "# Get input data from the first Code node\nitem = _input.first()\n\n# Get URLs and filenames\nurls = item.json.get('attachmentUrls', [])\nfilenames = item.json.get('attachmentInfo', [])\noriginal_message = item.json.get('message', '')\n\nprint(f\"Processing {len(urls)} URLs\")\n\n# Create separate items for each URL\nresult_items = []\n\nfor i, url in enumerate(urls):\n    if url:  # Only process non-empty URLs\n        filename = filenames[i] if i < len(filenames) else f'file_{i}'\n        # Structure the data correctly for n8n\n        result_items.append({\n            'json': {\n                'url': url,\n                'filename': filename,\n                'index': i,\n                'originalMessage': original_message\n            }\n        })\n        print(f\"Added item {i}: {url}\")\n\nprint(f\"Returning {len(result_items)} items\")\n\n# Return all items with proper n8n structure\nreturn result_items"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        200
+      ],
+      "id": "35d1448d-7bb3-421f-8609-b1944f73b328",
+      "name": "Code1"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        420,
+        -300
+      ],
+      "id": "08d08a1c-b1dc-454b-92bd-e2df6e09cc4d",
+      "name": "Read/Write Files from Disk",
+      "disabled": true
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "Code1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Split in Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code1": {
+      "main": [
+        [
+          {
+            "node": "Split in Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split in Batches": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "45fcc6e9-a69a-475f-9436-9bc17bcd1697",
+  "meta": {
+    "instanceId": "fafa3a25fa9b523fdec332538ba4c99139af9f959fa24f9e15977667e5dce8cd"
+  },
+  "id": "0LJseIGAbSbc6GLC",
+  "tags": []
+}

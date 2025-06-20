@@ -1,0 +1,926 @@
+{
+  "name": "retoucher",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "9_Sp9EWDphFR6ujOcsaRI1JDEACp4nLG4SSQuVgALgvaEbfCg8bfgHdvyquvImc6DEXi",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -105
+      ],
+      "id": "e018ff4d-716e-4eb3-b9e0-43ed9aa4454e",
+      "name": "Webhook",
+      "webhookId": "efec9bee-b1eb-4704-81b0-24d9edd4ec6d"
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "import re\n\n# Get the message content from the incoming webhook data\ninput_data = _input.first()\ninput_string = input_data.json.get('body', {}).get('content', '')\n\n# Find the first sequence of digits and store it\nsupply_id_list = re.findall(r'\\d+', input_string)\n\n# Extract attachments as well\nattachments = input_data.json.get('body', {}).get('attachments', [])\nurls = [att.get('url') for att in attachments if att.get('url')]\n\n# Return both supply_id and attachment URLs\nreturn {\n    'supply_id': supply_id_list[0] if supply_id_list else 'unknown',\n    'attachmentUrls': urls,\n    'original_data': input_data.json\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -200
+      ],
+      "id": "74ec6441-b676-4c1e-8d41-c2be204c3ba2",
+      "name": "Extract Data"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "attachmentUrls",
+        "include": "=",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        -60
+      ],
+      "id": "caf7cd47-df0f-4a2f-9890-9deeae2f1ca8",
+      "name": "Split URLs",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.attachmentUrls }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        -60
+      ],
+      "id": "134f0fd9-a15c-4300-be2d-5316c53819e1",
+      "name": "Download Images"
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "import cv2\nimport numpy as np\nimport base64\n\nitems = _input.all()\nresults = []\n\n\nfor item in items:\n    try:\n        # Get binary data from n8n HTTP Request node\n        binary_data = item.get(\"binary\", {})\n\n        # Handle different binary data formats\n        if \"data\" in binary_data:\n            raw_data = binary_data[\"data\"]\n\n            # Convert JsProxy to Python if needed\n            if hasattr(raw_data, 'to_py'):\n                python_data = raw_data.to_py()\n\n                if isinstance(python_data, dict):\n                    if 'data' in python_data:\n                        actual_data = python_data['data']\n                        if isinstance(actual_data, str):\n                            image_bytes = base64.b64decode(actual_data)\n                        else:\n                            image_bytes = bytes(actual_data)\n                    else:\n                        # Try to find byte-like data\n                        for key, value in python_data.items():\n                            if isinstance(value, (str, list, tuple)) and len(str(value)) > 100:\n                                try:\n                                    if isinstance(value, str):\n                                        image_bytes = base64.b64decode(value)\n                                    else:\n                                        image_bytes = bytes(value)\n                                    break\n                                except:\n                                    continue\n                        else:\n                            raise ValueError(f\"Could not find binary data in dict\")\n                elif isinstance(python_data, str):\n                    image_bytes = base64.b64decode(python_data)\n                elif isinstance(python_data, (list, tuple)):\n                    image_bytes = bytes(python_data)\n                else:\n                    image_bytes = bytes(python_data)\n            elif isinstance(raw_data, str):\n                image_bytes = base64.b64decode(raw_data)\n            elif isinstance(raw_data, bytes):\n                image_bytes = raw_data\n            else:\n                image_bytes = bytes(raw_data)\n        else:\n            raise ValueError(\"No binary data found\")\n\n        # Convert bytes to NumPy array\n        np_arr = np.frombuffer(image_bytes, np.uint8)\n\n        # Decode image\n        img = cv2.imdecode(np_arr, cv2.IMREAD_UNCHANGED)\n        if img is None:\n            raise ValueError(\"Failed to decode image\")\n        \n        # Image enhancement functions\n        def measure_yellowness(image):\n            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)\n            b_channel = lab[:, :, 2].astype(np.float32)\n            lab_yellowness = np.mean(b_channel) - 128\n            return lab_yellowness\n            \n        def remove_yellow_cast_white_balance(image, strength):\n            b, g, r = cv2.split(image.astype(np.float32))\n            avg_b = np.mean(b)\n            avg_g = np.mean(g)\n            avg_r = np.mean(r)\n            max_avg = max(avg_b, avg_g, avg_r)\n            scale_b = max_avg / avg_b if avg_b > 0 else 1.0\n            scale_g = max_avg / avg_g if avg_g > 0 else 1.0\n            scale_r = max_avg / avg_r if avg_r > 0 else 1.0\n            scale_b = 1.0 + (scale_b - 1.0) * strength\n            scale_g = 1.0 + (scale_g - 1.0) * strength\n            scale_r = 1.0 + (scale_r - 1.0) * strength\n            b_corrected = np.clip(b * scale_b, 0, 255)\n            g_corrected = np.clip(g * scale_g, 0, 255)\n            r_corrected = np.clip(r * scale_r, 0, 255)\n            return cv2.merge((b_corrected.astype(np.uint8), \n                            g_corrected.astype(np.uint8), \n                            r_corrected.astype(np.uint8)))\n                            \n        def process_white_balance_correction(image, strength=0.4):\n            yellowness = measure_yellowness(image)\n            if 10 <= yellowness <= 16:\n                return remove_yellow_cast_white_balance(image, strength=strength)\n            else:\n                return image\n        \n        def measure_brightness(img):\n            b, g, r = cv2.split(img.astype(\"float\"))\n            perceived_brightness = np.mean(0.2126 * r + 0.7152 * g + 0.0722 * b)\n            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)\n            gray_brightness = np.mean(gray)\n            return np.mean([perceived_brightness, gray_brightness])\n        \n        def adjust_brightness_smart(image, dark_threshold=70, bright_threshold=150):\n            current_brightness = measure_brightness(image)\n            if current_brightness < dark_threshold:\n                strength = (dark_threshold - current_brightness) / dark_threshold\n                adjustment = 20 + (strength * 50)\n            elif current_brightness > bright_threshold:\n                strength = (current_brightness - bright_threshold) / (255 - bright_threshold)\n                adjustment = -(30 + (strength * 40))\n            else:\n                return image\n                \n            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)\n            h, s, v = cv2.split(hsv)\n            v = np.clip(v.astype(np.float32) + adjustment, 0, 255).astype(np.uint8)\n            final_hsv = cv2.merge((h, s, v))\n            return cv2.cvtColor(final_hsv, cv2.COLOR_HSV2BGR)\n\n        def measure_contrast(image):\n            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)\n            return np.std(gray)\n            \n        def adjust_contrast_adaptive(image, target_contrast=40, strength=0.3):\n            current_contrast = measure_contrast(image)\n            if current_contrast < target_contrast * 0.7:\n                adjustment_factor = 1.0 + (strength * ((target_contrast - current_contrast) / target_contrast))\n                adjustment_factor = min(adjustment_factor, 1.5)\n            elif current_contrast > target_contrast * 1.5:\n                adjustment_factor = 1.0 - (strength * 0.3)\n                adjustment_factor = max(adjustment_factor, 0.5)\n            else:\n                return image\n            return cv2.convertScaleAbs(image, alpha=adjustment_factor, beta=0)\n\n        # Apply enhancements\n        white_img = process_white_balance_correction(img, strength=0.3)\n        brightness_img = adjust_brightness_smart(white_img)\n        processed_img = adjust_contrast_adaptive(brightness_img, target_contrast=50, strength=0.3)\n        \n        # Re-encode to PNG\n        success, buffer = cv2.imencode(\".png\", processed_img)\n        if not success:\n            raise ValueError(\"Failed to encode enhanced image\")\n\n        # Convert back to base64\n        enhanced_b64 = base64.b64encode(buffer.tobytes()).decode('utf-8')\n\n        # Create filename\n        original_filename = item.get(\"binary\", {}).get(\"fileName\", \"image.png\")\n        if not original_filename.endswith(('.png', '.jpg', '.jpeg')):\n            original_filename += '.png'\n        retouched_filename = f\"retouched_{original_filename}\"\n\n        results.append({\n            \"json\": {\n                \"filename\": retouched_filename,\n                \"success\": True,\n                \"data\": enhanced_b64,\n                \"mimeType\": \"image/png\",\n                \"original_filename\": original_filename\n            },\n            \"binary\": {\n                \"data\": enhanced_b64,\n                \"mimeType\": \"image/png\",\n                \"fileName\": retouched_filename,\n                \"fileExtension\": \"png\"\n            }\n        })\n\n    except Exception as e:\n        results.append({\n            \"json\": {\n                \"filename\": \"error.txt\",\n                \"success\": False,\n                \"error_message\": str(e),\n                \"folder_id\": folder_id,  # Added folder ID to error case too\n                \"original_filename\": item.get(\"json\", {}).get(\"filename\", \"unknown\")\n            }\n        })\n\nreturn results"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -60
+      ],
+      "id": "87df8bff-5985-486d-84d2-25f0bb5907ca",
+      "name": "Image Enhancer"
+    },
+    {
+      "parameters": {
+        "operation": "toBinary",
+        "sourceProperty": "data",
+        "options": {
+          "fileName": "={{ $json.filename }}",
+          "mimeType": "={{ $json.mimeType || 'image/png' }}"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        -55
+      ],
+      "id": "af42d301-e2bc-4ecc-9eb9-ce866fa380e9",
+      "name": "Convert to File"
+    },
+    {
+      "parameters": {
+        "content": "**Main workflow flow**\n1. Webhook receives Discord message\n2. Extract supply ID and attachment URLs\n3. Create Google Drive folder\n4. Download and process images\n5. Upload enhanced images to folder",
+        "height": 320,
+        "width": 500,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        790,
+        -265
+      ],
+      "id": "3eb08f52-7c17-431b-ac56-a4d2e2eb0a85",
+      "name": "Workflow Overview"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [
+        3520,
+        -30
+      ],
+      "id": "6f942fef-9114-4538-9ca5-56119cdc144b",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "guildId": {
+          "__rl": true,
+          "value": "1366630727298318376",
+          "mode": "list",
+          "cachedResultName": "retoucher",
+          "cachedResultUrl": "https://discord.com/channels/1366630727298318376"
+        },
+        "channelId": {
+          "__rl": true,
+          "value": "1366630727298318379",
+          "mode": "list",
+          "cachedResultName": "general",
+          "cachedResultUrl": "https://discord.com/channels/1366630727298318376/1366630727298318379"
+        },
+        "content": "=https://drive.google.com/drive/u/0/folders/{{ $('Create Main Folder').item.json.id }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        4180,
+        -400
+      ],
+      "id": "7aea4809-8a34-4b6e-b9a7-4d1bdbdde8eb",
+      "name": "Discord",
+      "webhookId": "6a8cc820-c855-4cb6-a1d3-919050a5ed07",
+      "executeOnce": true,
+      "credentials": {
+        "discordBotApi": {
+          "id": "4tqpU2yAz9uFsdEG",
+          "name": "Discord Bot account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        220
+      ],
+      "id": "64b325b9-bfe0-4d38-80a7-e423e6390fc3",
+      "name": "No Operation, do nothing"
+    },
+    {
+      "parameters": {
+        "inputDataFieldName": "bg",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('watermarked folder').item.json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3740,
+        -30
+      ],
+      "id": "dcba6886-d6e9-475c-a223-1af536175ee7",
+      "name": "Upload Watermarked",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wTG5Ik2K8CJlmrT6",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "information"
+      },
+      "id": "8b45b3a2-874e-4fd6-8f9d-f3afa8b88991",
+      "name": "Get Meta BG",
+      "type": "n8n-nodes-base.editImage",
+      "position": [
+        2200,
+        20
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2fb3fd91-c13d-45ce-a7ec-612319a008fc",
+              "name": "metaTop",
+              "type": "object",
+              "value": "={{ $json }}"
+            }
+          ]
+        },
+        "options": {
+          "includeBinary": true
+        }
+      },
+      "id": "b0262407-a174-4f35-a9ac-768c3ec8cc3f",
+      "name": "Nest Top Meta",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        2420,
+        220
+      ],
+      "typeVersion": 3.3
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2fb3fd91-c13d-45ce-a7ec-612319a008fc",
+              "name": "metaBg",
+              "type": "object",
+              "value": "={{ $json }}"
+            }
+          ]
+        },
+        "options": {
+          "includeBinary": true
+        }
+      },
+      "id": "fa7b87be-8f2b-4857-ab97-8af5824fba8b",
+      "name": "Nest Bg Meta",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        2420,
+        20
+      ],
+      "typeVersion": 3.3
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex",
+        "options": {}
+      },
+      "id": "16983256-8494-47b4-befb-f992a49582c9",
+      "name": "Wait for both Images and merge Binary in one Item",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        2900,
+        120
+      ],
+      "typeVersion": 2.1
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "$input.item.binary.logo = $input.item.binary.data;\ndelete $input.item.binary.data;\nreturn $input.item;"
+      },
+      "id": "ae91d567-7d0c-483f-b9db-6c30b7c87979",
+      "name": "Rename Image Binary Top Image",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        2640,
+        220
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "information"
+      },
+      "id": "af0b8f48-9289-49b0-85bc-4a42187d959b",
+      "name": "Get Meta Top",
+      "type": "n8n-nodes-base.editImage",
+      "position": [
+        2200,
+        220
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "composite",
+        "dataPropertyName": "bg",
+        "dataPropertyNameComposite": "logo",
+        "positionX": "={{ $json.center.x }}",
+        "positionY": "={{ $json.center.y }} ",
+        "options": {
+          "fileName": "___.png",
+          "format": "png"
+        }
+      },
+      "id": "cc440cb4-807d-4db4-b7a5-31d3681f8685",
+      "name": "Let \"top\" overlay \"bg\"",
+      "type": "n8n-nodes-base.editImage",
+      "position": [
+        3300,
+        120
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "url": "https://cdn.discordapp.com/attachments/1366615790928789544/1369875357561389087/Logo_Mnotone.png?ex=684b97d8&is=684a4658&hm=b9a8e1b1257226fa3bca03ba9f3272a852f43396c894d55738cb4c799c71bde9&",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "37358632-dcf6-490e-8815-300497667aef",
+      "name": "GET logo.png",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        1760,
+        220
+      ],
+      "typeVersion": 4.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "name": "={{ $json.supply_id }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "root",
+          "cachedResultName": "/ (Root folder)"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3040,
+        -340
+      ],
+      "id": "3160c8c5-ff74-4774-9117-a278d75bf0d3",
+      "name": "Create Main Folder",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wTG5Ik2K8CJlmrT6",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "name": "=watermarked_{{ $json.name }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3300,
+        -160
+      ],
+      "id": "40b53538-b59b-48e2-b091-94ed2bb25e78",
+      "name": "watermarked folder",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wTG5Ik2K8CJlmrT6",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "name": "=non_watermarked_{{ $('Extract Data').item.json.supply_id }}",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list",
+          "cachedResultName": "My Drive",
+          "cachedResultUrl": "https://drive.google.com/drive/my-drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3320,
+        -520
+      ],
+      "id": "e3d6a478-3011-48e3-9a8e-701f419d1ad6",
+      "name": "non-watermark folder",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wTG5Ik2K8CJlmrT6",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('non-watermark folder').item.json.id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        3740,
+        -580
+      ],
+      "id": "7e30d7c2-8c59-4e76-855a-164775b8d206",
+      "name": "Upload Non-watermark",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wTG5Ik2K8CJlmrT6",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [
+        3520,
+        -580
+      ],
+      "id": "426fa662-f921-4837-aa9a-14007b393179",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "$input.item.binary.bg = $input.item.binary.data;\ndelete $input.item.binary.data;\nreturn $input.item;"
+      },
+      "id": "c390df22-6226-4723-8880-284cfb040a28",
+      "name": "Rename Image Binary Background Image",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        2640,
+        20
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [
+        3960,
+        -400
+      ],
+      "id": "f381d456-7b14-4b26-9993-004bdc996800",
+      "name": "Merge2",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "resize",
+        "width": 283.5,
+        "height": 169,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.editImage",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        220
+      ],
+      "id": "211b478e-308b-4a1d-af08-a8f35d1fdab5",
+      "name": "Edit Image1"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\n\n  const centerX = ($input.item.json.metaBg.size.width - 100 -  ($input.item.json.metaTop.size.width ));\n  const centerY =  20\n  // const centerY = ($input.item.json.metaBg.size.height - 10 -  ($input.item.json.metaTop.size.height / 2));\n\n  $input.item.json.center = { x: centerX, y: centerY };\n\nreturn $input.item"
+      },
+      "id": "ede0f2aa-6c22-4d6f-8d3e-dbb8e95d8cd0",
+      "name": "Watermark Poisitioning",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        3080,
+        120
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        440
+      ],
+      "id": "7e976c6e-2345-49a3-8ed4-40bfd624a7bf",
+      "name": "Read/Write Files from Disk",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "import logo",
+        "height": 400
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1700,
+        180
+      ],
+      "typeVersion": 1,
+      "id": "9e2adff9-a144-4ca5-8513-224fae845cc5",
+      "name": "Sticky Note"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Data",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "No Operation, do nothing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Data": {
+      "main": [
+        [
+          {
+            "node": "Split URLs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Create Main Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split URLs": {
+      "main": [
+        [
+          {
+            "node": "Download Images",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Images": {
+      "main": [
+        [
+          {
+            "node": "Image Enhancer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image Enhancer": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Get Meta BG",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Upload Watermarked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Operation, do nothing": {
+      "main": [
+        [
+          {
+            "node": "GET logo.png",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Watermarked": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Get Meta BG": {
+      "main": [
+        [
+          {
+            "node": "Nest Bg Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Meta Top": {
+      "main": [
+        [
+          {
+            "node": "Nest Top Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nest Bg Meta": {
+      "main": [
+        [
+          {
+            "node": "Rename Image Binary Background Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nest Top Meta": {
+      "main": [
+        [
+          {
+            "node": "Rename Image Binary Top Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rename Image Binary Top Image": {
+      "main": [
+        [
+          {
+            "node": "Wait for both Images and merge Binary in one Item",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Wait for both Images and merge Binary in one Item": {
+      "main": [
+        [
+          {
+            "node": "Watermark Poisitioning",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET logo.png": {
+      "main": [
+        [
+          {
+            "node": "Edit Image1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Let \"top\" overlay \"bg\"": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Create Main Folder": {
+      "main": [
+        [
+          {
+            "node": "watermarked folder",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "non-watermark folder",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "watermarked folder": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "non-watermark folder": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Upload Non-watermark",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rename Image Binary Background Image": {
+      "main": [
+        [
+          {
+            "node": "Wait for both Images and merge Binary in one Item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Non-watermark": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Edit Image1": {
+      "main": [
+        [
+          {
+            "node": "Get Meta Top",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Watermark Poisitioning": {
+      "main": [
+        [
+          {
+            "node": "Let \"top\" overlay \"bg\"",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discord": {
+      "main": [
+        []
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Edit Image1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "0cc7af38-e3aa-4909-a132-8475c1fb9044",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "c93f12bc8c65b48f6342ec9c20590c4ea3a5d6ac3a8755f939ec8ad5728b7c89"
+  },
+  "id": "GTrr0eAKQF89fGRU",
+  "tags": []
+}

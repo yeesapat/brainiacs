@@ -1,0 +1,8 @@
+discord.py
+python-dotenv
+opencv-python
+pillow
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2

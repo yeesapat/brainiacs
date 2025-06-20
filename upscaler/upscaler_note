@@ -1,0 +1,12 @@
+Set up 
+1. ต้องมี cred(Google OAuth2 for Desktop Application) ใน Google cloud console project: Living Soon AI solution ผมตั้งชื่อว่า loop
+2. เอา client_id และ client_secret มาใส่ในไฟล์ settings.yaml
+3. ผูกกับ Google account ที่ต้องการใช้
+4. อย่าลืม install packages 
+
+
+การทำงาน
+ตอนนี้ผมตั้งให้มันแสกนโฟลเดอร์ของ account ที่ผูกไว้ หากเจอfolderที่ยังไม่เคยอัพสเกลจะdownload รูปมาupscale locally หลังจากupscale รูปเสร็จสิ้น จะupload ขึ้นfolder ที่อยู่ใน folder ของsup id นั้น
+
+
+
